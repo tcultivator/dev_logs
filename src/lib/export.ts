@@ -5,25 +5,48 @@ export type ExportEntry = {
   body: string;
   type: EntryType;
   done: boolean;
+  projectName?: string | null;
 };
 
-function groupByTitle(entries: ExportEntry[]) {
-  const map = new Map<string, { title: string; notes: string[] }>();
+type TitleGroup = { title: string; notes: string[] };
+type ProjectGroup = { project: string; titles: TitleGroup[] };
+
+function groupByProjectThenTitle(entries: ExportEntry[]): ProjectGroup[] {
+  const projectMap = new Map<
+    string,
+    { project: string; titles: Map<string, TitleGroup> }
+  >();
 
   for (const entry of entries) {
-    const key = entry.title.trim().toLowerCase();
     const note = entry.body.trim();
     if (!note) continue;
 
-    const existing = map.get(key);
-    if (existing) {
-      existing.notes.push(note);
+    const projectLabel = entry.projectName?.trim() || "No project";
+    const projectKey = projectLabel.toLowerCase();
+    const titleLabel = entry.title.trim();
+    const titleKey = titleLabel.toLowerCase();
+
+    let projectGroup = projectMap.get(projectKey);
+    if (!projectGroup) {
+      projectGroup = { project: projectLabel, titles: new Map() };
+      projectMap.set(projectKey, projectGroup);
+    }
+
+    const existingTitle = projectGroup.titles.get(titleKey);
+    if (existingTitle) {
+      existingTitle.notes.push(note);
     } else {
-      map.set(key, { title: entry.title.trim(), notes: [note] });
+      projectGroup.titles.set(titleKey, {
+        title: titleLabel,
+        notes: [note],
+      });
     }
   }
 
-  return Array.from(map.values());
+  return Array.from(projectMap.values()).map((group) => ({
+    project: group.project,
+    titles: Array.from(group.titles.values()),
+  }));
 }
 
 /** Strip existing list markers so every line gets the same bullet. */
@@ -41,13 +64,19 @@ function toBulletLines(note: string) {
     .map((line) => `- ${stripBulletPrefix(line)}`);
 }
 
-function formatGroupedSection(groups: { title: string; notes: string[] }[]) {
-  if (!groups.length) return "";
+function formatGroupedSection(projects: ProjectGroup[]) {
+  if (!projects.length) return "";
 
-  return groups
-    .map((group) => {
-      const bullets = group.notes.flatMap(toBulletLines).join("\n");
-      return `${group.title}\n${bullets}`;
+  return projects
+    .map((project) => {
+      const titleBlocks = project.titles
+        .map((group) => {
+          const bullets = group.notes.flatMap(toBulletLines).join("\n");
+          return `${group.title}\n${bullets}`;
+        })
+        .join("\n\n");
+
+      return `[${project.project}]\n\n${titleBlocks}`;
     })
     .join("\n\n");
 }
@@ -64,12 +93,11 @@ export function buildDailyAccomplishmentText(options: {
     (e) => e.type !== "TODO" && e.type !== "REMINDER"
   );
   const nextTasks = options.entries.filter(
-    (e) =>
-      (e.type === "TODO" || e.type === "REMINDER") && !e.done
+    (e) => (e.type === "TODO" || e.type === "REMINDER") && !e.done
   );
 
-  const tasksText = formatGroupedSection(groupByTitle(completed));
-  const nextText = formatGroupedSection(groupByTitle(nextTasks));
+  const tasksText = formatGroupedSection(groupByProjectThenTitle(completed));
+  const nextText = formatGroupedSection(groupByProjectThenTitle(nextTasks));
 
   return [
     "DAILY ACCOMPLISHMENT",

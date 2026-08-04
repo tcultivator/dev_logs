@@ -1,9 +1,17 @@
-import mysql, { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import mysql, {
+  Pool,
+  ResultSetHeader,
+  RowDataPacket,
+} from "mysql2/promise";
 
 declare global {
   // eslint-disable-next-line no-var
   var mysqlPool: Pool | undefined;
 }
+
+type SqlParamValue = string | number | boolean | Date | Buffer | null | undefined;
+export type SqlParamMap = Record<string, SqlParamValue>;
+export type SqlParams = SqlParamValue[] | SqlParamMap;
 
 function createPool() {
   return mysql.createPool({
@@ -29,16 +37,17 @@ export type { ResultSetHeader, RowDataPacket };
 
 export async function query<T extends RowDataPacket[]>(
   sql: string,
-  params?: Record<string, unknown> | unknown[]
+  params?: SqlParams
 ) {
-  const [rows] = await getPool().execute<T>(sql, params);
+  // Cast avoids mysql2 overload mismatch with named placeholder objects
+  const [rows] = await getPool().query<T>(sql, params as SqlParamValue[]);
   return rows;
 }
 
-export async function execute(
-  sql: string,
-  params?: Record<string, unknown> | unknown[]
-) {
-  const [result] = await getPool().execute<ResultSetHeader>(sql, params);
+export async function execute(sql: string, params?: SqlParams) {
+  const [result] = await getPool().query<ResultSetHeader>(
+    sql,
+    params as SqlParamValue[]
+  );
   return result;
 }

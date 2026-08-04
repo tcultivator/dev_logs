@@ -344,6 +344,18 @@ button {
   letter-spacing: -0.01em;
 }
 
+.entry-title-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.entry-title-btn:hover .entry-title {
+  text-decoration: underline;
+}
+
 .meta {
   display: flex;
   flex-wrap: wrap;
@@ -425,4 +437,34 @@ button {
   border-radius: var(--radius-sm);
   padding: 12px 14px;
   background: #fff;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(17, 17, 17, 0.45);
+}
+
+.modal {
+  width: min(640px, 100%);
+  max-height: min(85vh, 800px);
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.view-meta {
+  margin: 0 0 14px;
+}
+
+.view-body {
+  margin-bottom: 16px;
 }
