@@ -52,6 +52,7 @@ export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [viewingEntry, setViewingEntry] = useState<Entry | null>(null);
   const [projectName, setProjectName] = useState("");
   const [exportName, setExportName] = useState("");
   const [query, setQuery] = useState("");
@@ -106,6 +107,15 @@ export default function HomePage() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!viewingEntry) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setViewingEntry(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [viewingEntry]);
+
   const activeDateLabel = useMemo(() => {
     const value = dateFilter || toInputDate();
     return formatDate(parseInputDate(value));
@@ -121,13 +131,20 @@ export default function HomePage() {
     const text = buildDailyAccomplishmentText({
       name: exportName,
       date: parseInputDate(dateValue),
-      entries,
+      entries: entries.map((entry) => ({
+        title: entry.title,
+        body: entry.body,
+        type: entry.type,
+        done: entry.done,
+        projectName: entry.project?.name ?? null,
+      })),
     });
     const filename = `daily-accomplishment-${dateValue}.txt`;
     downloadTextFile(filename, text);
   }
 
   function startEdit(entry: Entry) {
+    setViewingEntry(null);
     setEditingId(entry.id);
     setForm({
       title: entry.title,
@@ -137,6 +154,14 @@ export default function HomePage() {
       projectId: entry.projectId || "",
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function openView(entry: Entry) {
+    setViewingEntry(entry);
+  }
+
+  function closeView() {
+    setViewingEntry(null);
   }
 
   function cancelEdit() {
@@ -540,7 +565,13 @@ export default function HomePage() {
                         className={`entry-card${entry.done ? " done" : ""}`}
                       >
                         <div className="entry-head">
-                          <h3 className="entry-title">{entry.title}</h3>
+                          <button
+                            type="button"
+                            className="entry-title-btn"
+                            onClick={() => openView(entry)}
+                          >
+                            <h3 className="entry-title">{entry.title}</h3>
+                          </button>
                           <span className="muted">
                             {formatTime(entry.createdAt)}
                           </span>
@@ -565,6 +596,13 @@ export default function HomePage() {
                           {entry.body}
                         </div>
                         <div className="btn-row">
+                          <button
+                            className="btn"
+                            type="button"
+                            onClick={() => openView(entry)}
+                          >
+                            View
+                          </button>
                           <button
                             className="btn secondary"
                             type="button"
@@ -608,6 +646,92 @@ export default function HomePage() {
           )}
         </section>
       </div>
+
+      {viewingEntry ? (
+        <div
+          className="modal-backdrop"
+          onClick={closeView}
+          role="presentation"
+        >
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="view-entry-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="panel-head">
+              <h2 id="view-entry-title">{viewingEntry.title}</h2>
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={closeView}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="meta">
+              <span
+                className="chip type"
+                style={{ background: typeMeta(viewingEntry.type).color }}
+              >
+                {typeMeta(viewingEntry.type).label}
+              </span>
+              {viewingEntry.project ? (
+                <span className="chip">{viewingEntry.project.name}</span>
+              ) : null}
+              {parseTags(viewingEntry.tags).map((tag) => (
+                <span key={tag} className="chip">
+                  #{tag}
+                </span>
+              ))}
+              {viewingEntry.done ? (
+                <span className="chip">Done</span>
+              ) : null}
+            </div>
+
+            <p className="muted view-meta">
+              {formatDate(viewingEntry.createdAt)} ·{" "}
+              {formatTime(viewingEntry.createdAt)}
+            </p>
+
+            <div
+              className={`entry-body view-body${
+                isCodeType(viewingEntry.type) ? " code" : ""
+              }`}
+            >
+              {viewingEntry.body}
+            </div>
+
+            <div className="btn-row">
+              <button
+                className="btn"
+                type="button"
+                onClick={() => startEdit(viewingEntry)}
+              >
+                Edit
+              </button>
+              {isCodeType(viewingEntry.type) ? (
+                <button
+                  className="btn secondary"
+                  type="button"
+                  onClick={() => copyBody(viewingEntry.body)}
+                >
+                  Copy
+                </button>
+              ) : null}
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={closeView}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { execute, query, SqlParamMap } from "@/lib/db";
 import { EntryType } from "@/lib/entries";
 
 export type ProjectRow = RowDataPacket & {
@@ -124,7 +124,7 @@ export async function listEntries(filters: {
   to?: Date;
 }) {
   const clauses: string[] = [];
-  const params: Record<string, unknown> = {};
+  const params: Record<string, string | number | Date> = {};
 
   if (filters.type) {
     clauses.push("e.type = :type");
@@ -207,7 +207,7 @@ export async function updateEntry(
   }>
 ) {
   const fields: string[] = [];
-  const params: Record<string, unknown> = { id };
+  const params: SqlParamMap = { id };
 
   if (data.title !== undefined) {
     fields.push("title = :title");
