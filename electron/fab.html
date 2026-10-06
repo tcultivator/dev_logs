@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    -webkit-app-region: no-drag;
+  }
+  .fab {
+    width: 56px;
+    height: 56px;
+    margin: 8px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    background: linear-gradient(145deg, #162338, #0b1524);
+    border: 2px solid rgba(200, 30, 42, 0.45);
+    color: #fff;
+    font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    box-shadow:
+      0 0 20px rgba(200, 30, 42, 0.28),
+      0 8px 24px rgba(11, 21, 36, 0.35);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .fab { cursor: grab; }
+  .fab:active { cursor: grabbing; }
+  .fab:hover {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 28px rgba(200, 30, 42, 0.4),
+      0 10px 30px rgba(11, 21, 36, 0.45);
+  }
+  .fab:active { transform: scale(0.96); }
+</style>
+</head>
+<body>
+  <button class="fab" id="fab" title="Dev Log — drag to move">&lt;/&gt;</button>
+  <script>
+    const fab = document.getElementById("fab");
+    let dragging = false;
+    let startX = 0, startY = 0;
+    let moved = false;
+
+    fab.addEventListener("mousedown", (e) => {
+      dragging = true;
+      moved = false;
+      startX = e.screenX;
+      startY = e.screenY;
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const dx = e.screenX - startX;
+      const dy = e.screenY - startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        moved = true;
+        window.devlog.fabDrag(dx, dy);
+        startX = e.screenX;
+        startY = e.screenY;
+      }
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      if (moved) {
+        window.devlog.fabDragEnd();
+      } else {
+        window.devlog.fabClick();
+      }
+    });
+  </script>
+</body>
+</html>
