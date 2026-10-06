@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: #0e1118;
+    font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  }
+  .panel-root {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  .panel-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #12151d;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    -webkit-app-region: drag;
+  }
+  .panel-bar h3 {
+    color: #eef2f7;
+    font-size: 0.84rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .close-btn {
+    border: none;
+    background: transparent;
+    color: #8b93a7;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 4px 8px;
+    border-radius: 6px;
+    -webkit-app-region: no-drag;
+  }
+  .close-btn:hover {
+    background: rgba(251,113,133,0.15);
+    color: #fb7185;
+  }
+  .panel-frame {
+    flex: 1;
+    border: none;
+    background: #0e1118;
+  }
+</style>
+</head>
+<body>
+  <div class="panel-root">
+    <div class="panel-bar">
+      <h3 id="title">Dev Log</h3>
+      <button class="close-btn" id="closeBtn" title="Close">✕</button>
+    </div>
+    <iframe id="frame" class="panel-frame"></iframe>
+  </div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const page = params.get("page") || "capture";
+
+    const labels = {
+      capture: "Quick Capture",
+      logs: "Work Logs",
+      scratch: "Scratch Paper",
+      dashboard: "Dashboard",
+      projects: "Projects",
+    };
+    document.getElementById("title").textContent = labels[page] || "Dev Log";
+    document.getElementById("frame").src =
+      "http://localhost:3000?widget=1&page=" + encodeURIComponent(page);
+
+    document.getElementById("closeBtn").addEventListener("click", () => {
+      window.devlog.closePanel();
+    });
+  </script>
+</body>
+</html>

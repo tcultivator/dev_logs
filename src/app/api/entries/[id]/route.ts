@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
-import { ENTRY_TYPE_VALUES, EntryType } from "@/lib/entries";
-import { deleteEntry, updateEntry } from "@/lib/models";
+import {
+  ENTRY_TYPE_VALUES,
+  EntryType,
+  TICKET_STATUS_VALUES,
+  TicketStatus,
+  isTicketType,
+} from "@/lib/entries";
+import { deleteEntry, getEntry, updateEntry } from "@/lib/models";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -8,6 +14,10 @@ export async function PATCH(request: Request, { params }: Params) {
   try {
     const { id } = await params;
     const body = await request.json();
+    const current = await getEntry(id);
+    if (!current) {
+      return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+    }
 
     const data: Partial<{
       title: string;
@@ -15,6 +25,7 @@ export async function PATCH(request: Request, { params }: Params) {
       type: EntryType;
       tags: string | null;
       done: boolean;
+      status: TicketStatus | null;
       projectId: string | null;
     }> = {};
 
@@ -27,6 +38,25 @@ export async function PATCH(request: Request, { params }: Params) {
     }
     if (body.type && ENTRY_TYPE_VALUES.includes(body.type)) {
       data.type = body.type;
+    }
+    if (body.status === null) {
+      data.status = null;
+    } else if (
+      typeof body.status === "string" &&
+      TICKET_STATUS_VALUES.includes(body.status as TicketStatus)
+    ) {
+      data.status = body.status as TicketStatus;
+    }
+
+    const nextType = data.type ?? current.type;
+    const nextProjectId =
+      data.projectId !== undefined ? data.projectId : current.projectId;
+
+    if (isTicketType(nextType) && !nextProjectId) {
+      return NextResponse.json(
+        { error: "project is required for tickets" },
+        { status: 400 }
+      );
     }
 
     const entry = await updateEntry(id, data);

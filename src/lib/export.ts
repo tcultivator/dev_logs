@@ -1,10 +1,11 @@
-import { EntryType, formatDate } from "@/lib/entries";
+import { EntryType, TicketStatus, formatDate } from "@/lib/entries";
 
 export type ExportEntry = {
   title: string;
   body: string;
   type: EntryType;
   done: boolean;
+  status?: TicketStatus | null;
   projectName?: string | null;
 };
 
@@ -81,23 +82,27 @@ function formatGroupedSection(projects: ProjectGroup[]) {
     .join("\n\n");
 }
 
+function isDoneTicket(entry: ExportEntry) {
+  return entry.type === "TICKET" && (entry.status === "DONE" || entry.done);
+}
+
 export function buildDailyAccomplishmentText(options: {
   name?: string;
   date: Date | string;
-  entries: ExportEntry[];
+  dateEnd?: Date | string;
+  /** Done tickets resolved in range (Tasks Completed). */
+  completedTickets: ExportEntry[];
 }) {
-  const reportDate = formatDate(options.date);
+  const startLabel = formatDate(options.date);
+  const endLabel = options.dateEnd ? formatDate(options.dateEnd) : null;
+  const reportDate =
+    endLabel && endLabel !== startLabel
+      ? `${startLabel} - ${endLabel}`
+      : startLabel;
   const name = options.name?.trim() || "";
 
-  const completed = options.entries.filter(
-    (e) => e.type !== "TODO" && e.type !== "REMINDER"
-  );
-  const nextTasks = options.entries.filter(
-    (e) => (e.type === "TODO" || e.type === "REMINDER") && !e.done
-  );
-
+  const completed = options.completedTickets.filter(isDoneTicket);
   const tasksText = formatGroupedSection(groupByProjectThenTitle(completed));
-  const nextText = formatGroupedSection(groupByProjectThenTitle(nextTasks));
 
   return [
     "DAILY ACCOMPLISHMENT",
@@ -114,7 +119,6 @@ export function buildDailyAccomplishmentText(options: {
     "",
     "Next Tasks:",
     "",
-    nextText || "",
     "",
     "Time Spent: ",
     "",

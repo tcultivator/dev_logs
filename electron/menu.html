@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
+    -webkit-app-region: no-drag;
+  }
+  .menu {
+    background: linear-gradient(180deg, #1a2332, #101828);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 8px;
+    margin: 8px;
+    box-shadow: 0 20px 50px rgba(16, 24, 40, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .menu-title {
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 6px 10px 4px;
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.78);
+    text-align: left;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.88rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    font-family: inherit;
+  }
+  .menu-item:hover {
+    background: rgba(192, 16, 32, 0.2);
+    color: #fff;
+  }
+  .menu-item .ico {
+    width: 20px;
+    text-align: center;
+    font-size: 0.9rem;
+    opacity: 0.85;
+  }
+  .sep {
+    height: 1px;
+    background: rgba(255, 255, 255, 0.06);
+    margin: 4px 8px;
+  }
+</style>
+</head>
+<body>
+  <div class="menu">
+    <div class="menu-title">Dev Log</div>
+    <button class="menu-item" data-page="capture">
+      <span class="ico">＋</span> New ticket
+    </button>
+    <button class="menu-item" data-page="logs">
+      <span class="ico">☰</span> Work logs
+    </button>
+    <button class="menu-item" data-page="scratch">
+      <span class="ico">✎</span> Scratch
+    </button>
+    <div class="sep"></div>
+    <button class="menu-item" data-page="dashboard">
+      <span class="ico">◈</span> Dashboard
+    </button>
+    <button class="menu-item" data-page="projects">
+      <span class="ico">▣</span> Projects
+    </button>
+  </div>
+  <script>
+    document.querySelectorAll(".menu-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        window.devlog.openPage(btn.dataset.page);
+      });
+    });
+  </script>
+</body>
+</html>

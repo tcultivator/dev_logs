@@ -19,22 +19,24 @@ CREATE TABLE IF NOT EXISTS `entries` (
   `title` VARCHAR(255) NOT NULL,
   `body` LONGTEXT NOT NULL,
   `type` ENUM(
-    'PROGRESS',
+    'TICKET',
     'LEARNING',
     'DB_CHANGE',
     'SQL',
-    'SNIPPET',
-    'REMINDER',
-    'TODO'
+    'SNIPPET'
   ) NOT NULL,
   `tags` TEXT NULL,
   `done` TINYINT(1) NOT NULL DEFAULT 0,
+  `status` ENUM('OPEN', 'IN_PROGRESS', 'DONE') NULL,
+  `resolved_at` DATETIME(3) NULL,
   `project_id` VARCHAR(36) NULL,
   `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   KEY `entries_type_idx` (`type`),
+  KEY `entries_status_idx` (`status`),
   KEY `entries_created_at_idx` (`created_at`),
+  KEY `entries_resolved_at_idx` (`resolved_at`),
   KEY `entries_project_id_idx` (`project_id`),
   CONSTRAINT `entries_project_id_fkey`
     FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)
