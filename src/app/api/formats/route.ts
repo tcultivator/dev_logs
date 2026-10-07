@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createProject, listProjects } from "@/lib/models";
+import { createReportFormat, listReportFormats } from "@/lib/formats";
+import { ReportFormatInput } from "@/lib/report-format";
 import { requireUser } from "@/lib/session";
 
 export async function GET() {
@@ -8,8 +9,8 @@ export async function GET() {
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const projects = await listProjects(user.id);
-    return NextResponse.json(projects);
+    const formats = await listReportFormats(user.id);
+    return NextResponse.json(formats);
   } catch (error) {
     console.error(error);
     return NextResponse.json(
@@ -26,29 +27,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const name = String(body.name || "").trim();
-    const description = body.description
-      ? String(body.description).trim()
-      : null;
-
-    if (!name) {
-      return NextResponse.json({ error: "name is required" }, { status: 400 });
+    const body = (await request.json()) as ReportFormatInput;
+    const created = await createReportFormat(user.id, body);
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error }, { status: 400 });
     }
-
-    const project = await createProject(user.id, name, description);
-    return NextResponse.json(project, { status: 201 });
+    return NextResponse.json(created.format, { status: 201 });
   } catch (error) {
     console.error(error);
     const message = String(error);
     if (message.includes("Duplicate") || message.includes("ER_DUP_ENTRY")) {
       return NextResponse.json(
-        { error: "Project name already exists" },
+        { error: "A format with that name already exists." },
         { status: 409 }
       );
     }
+    if (message.includes("report_formats")) {
+      return NextResponse.json(
+        { error: "Format storage is not ready. Apply sql/migrate-formats.sql." },
+        { status: 500 }
+      );
+    }
     return NextResponse.json(
-      { error: "Database error while creating project" },
+      { error: "Database error while saving the format." },
       { status: 500 }
     );
   }

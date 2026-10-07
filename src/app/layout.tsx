@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Plus_Jakarta_Sans } from "next/font/google";
+import AuthProvider from "@/components/AuthProvider";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -14,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "DevLog",
-  description: "Local ticket tracker and coding notes — not another Notepad dump.",
+  description: "Local work logs and coding notes.",
   appleWebApp: {
     capable: true,
     title: "DevLog",
@@ -26,7 +27,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#c81e2a",
+  themeColor: "#16181e",
 };
 
 export default function RootLayout({
@@ -39,7 +40,9 @@ export default function RootLayout({
       lang="en"
       className={`${jakarta.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-dvh">{children}</body>
+      <body className="min-h-dvh">
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

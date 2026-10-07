@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { signOut, useSession } from "next-auth/react";
 import {
   DEFAULT_ENTRY_TYPE,
   ENTRY_TYPES,
@@ -16,7 +17,16 @@ import {
   statusMeta,
   typeMeta,
 } from "@/lib/entries";
+import AdminFrame from "@/components/AdminFrame";
+import AnalyticsView from "@/components/AnalyticsView";
 import ScratchPad from "@/components/ScratchPad";
+import ConsolidatedFormatModal from "@/components/ConsolidatedFormatModal";
+import {
+  buildConsolidatedWeeks,
+  downloadConsolidatedDocx,
+  type ConsolidatedWeek,
+} from "@/lib/consolidated";
+import type { ReportFormat } from "@/lib/report-format";
 import {
   buildDailyAccomplishmentText,
   downloadTextFile,
@@ -45,7 +55,13 @@ type Entry = {
   project: Project | null;
 };
 
-type Page = "dashboard" | "capture" | "logs" | "projects" | "scratch";
+type Page =
+  | "dashboard"
+  | "analytics"
+  | "capture"
+  | "logs"
+  | "projects"
+  | "scratch";
 
 const emptyForm = {
   title: "",
@@ -54,7 +70,36 @@ const emptyForm = {
   status: "OPEN" as TicketStatus,
   tags: "",
   projectId: "",
+  loggedOn: "",
 };
+
+function freshForm() {
+  return { ...emptyForm, loggedOn: toInputDate() };
+}
+
+function accomplishmentTemplate(name = "") {
+  return `DAILY ACCOMPLISHMENT
+
+Name: ${name}
+Date: 
+
+Tasks Completed:
+
+`;
+}
+
+function accomplishmentName(text: string) {
+  const match = text.match(/^Name:\s*(.*)$/im);
+  return match?.[1].trim() || "";
+}
+
+function entryLogDate(entry: Entry) {
+  const source =
+    entry.status === "DONE" && entry.resolvedAt
+      ? entry.resolvedAt
+      : entry.createdAt;
+  return toInputDate(new Date(source));
+}
 
 function daysAgoInput(days: number) {
   const d = new Date();
@@ -78,7 +123,21 @@ function statusChipClass(status: TicketStatus | null | undefined) {
   return `chip chip--status-${key}`;
 }
 
+async function apiFetch(input: string, init?: RequestInit) {
+  const res = await fetch(input, init);
+  if (res.status === 401) {
+    window.location.assign("/login");
+    throw new Error("Sign in required");
+  }
+  if (res.status === 403) {
+    window.location.assign("/set-password");
+    throw new Error("Set a password to continue");
+  }
+  return res;
+}
+
 export default function HomePage() {
+  const { data: session } = useSession();
   const [widgetMode] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).has("widget");
@@ -87,14 +146,17 @@ export default function HomePage() {
     if (typeof window === "undefined") return "dashboard";
     const params = new URLSearchParams(window.location.search);
     const p = params.get("page");
-    if (p && ["dashboard", "capture", "logs", "projects", "scratch"].includes(p)) {
+    if (
+      p &&
+      ["dashboard", "analytics", "capture", "logs", "projects", "scratch"].includes(p)
+    ) {
       return p as Page;
     }
     return params.has("widget") ? "capture" : "dashboard";
   });
   const [entries, setEntries] = useState<Entry[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(freshForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [viewingEntry, setViewingEntry] = useState<Entry | null>(null);
   const [projectName, setProjectName] = useState("");
@@ -106,18 +168,25 @@ export default function HomePage() {
   const [dateTo, setDateTo] = useState(() => toInputDate());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [importText, setImportText] = useState(() => accomplishmentTemplate());
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState("");
   const [error, setError] = useState("");
   const [alerts, setAlerts] = useState<Entry[]>([]);
   const [doneToday, setDoneToday] = useState<Entry[]>([]);
+  const [unassigned, setUnassigned] = useState({ projects: 0, entries: 0 });
+  const [claiming, setClaiming] = useState(false);
+  const [preparingReport, setPreparingReport] = useState(false);
+  const [reportWeeks, setReportWeeks] = useState<ConsolidatedWeek[] | null>(null);
 
   const loadProjects = useCallback(async () => {
-    const res = await fetch("/api/projects");
+    const res = await apiFetch("/api/projects");
     if (!res.ok) throw new Error("Failed to load projects");
     setProjects(await res.json());
   }, []);
 
   const loadAlerts = useCallback(async () => {
-    const res = await fetch("/api/entries?type=TICKET&status=open");
+    const res = await apiFetch("/api/entries?type=TICKET&status=open");
     if (!res.ok) return;
     const tickets = (await res.json()) as Entry[];
     const open = tickets
@@ -138,13 +207,13 @@ export default function HomePage() {
       from: today,
       to: today,
     });
-    const res = await fetch(`/api/entries?${params}`);
+    const res = await apiFetch(`/api/entries?${params}`);
     if (!res.ok) return;
     setDoneToday(await res.json());
   }, []);
 
   const loadEntries = useCallback(async () => {
-    if (page === "scratch") return;
+    if (page === "scratch" || page === "analytics") return;
 
     const params = new URLSearchParams();
 
@@ -166,7 +235,7 @@ export default function HomePage() {
       if (projectFilter) params.set("projectId", projectFilter);
     }
 
-    const res = await fetch(`/api/entries?${params.toString()}`);
+    const res = await apiFetch(`/api/entries?${params.toString()}`);
     if (!res.ok) throw new Error("Failed to load entries");
     setEntries(await res.json());
   }, [page, query, typeFilter, projectFilter, dateFrom, dateTo]);
@@ -175,12 +244,17 @@ export default function HomePage() {
     setError("");
     setLoading(true);
     try {
-      await Promise.all([
+      const unassignedRes = await apiFetch("/api/account/unassigned");
+      const [unassignedData] = await Promise.all([
+        unassignedRes.ok
+          ? unassignedRes.json()
+          : Promise.resolve({ projects: 0, entries: 0 }),
         loadProjects(),
         loadEntries(),
         loadAlerts(),
         loadDoneToday(),
       ]);
+      setUnassigned(unassignedData);
     } catch (e) {
       setError(
         e instanceof Error
@@ -195,6 +269,15 @@ export default function HomePage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const name = session?.user?.name?.trim() || "";
+    if (!name) return;
+    setImportText((current) =>
+      current === accomplishmentTemplate() ? accomplishmentTemplate(name) : current
+    );
+    setExportName((current) => current || name);
+  }, [session?.user?.name]);
 
   useEffect(() => {
     if (!viewingEntry) return;
@@ -220,6 +303,25 @@ export default function HomePage() {
     [alerts]
   );
 
+  const nextOpen = openTickets[0] ?? null;
+  const latestDone = doneToday[0] ?? null;
+
+  const weekPoints = useMemo(() => {
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date();
+      date.setDate(date.getDate() - (6 - index));
+      const key = toInputDate(date);
+      const count = entries.filter(
+        (entry) => toInputDate(new Date(entry.createdAt)) === key
+      ).length;
+      const label = date
+        .toLocaleDateString(undefined, { weekday: "short" })
+        .slice(0, 3)
+        .toUpperCase();
+      return { key, count, label };
+    });
+  }, [entries]);
+
   const activeDateLabel = useMemo(() => {
     const from = dateFrom || toInputDate();
     const to = dateTo || dateFrom || toInputDate();
@@ -230,17 +332,20 @@ export default function HomePage() {
 
   const pageTitle = {
     dashboard: "Board",
-    capture: editingId ? "Edit ticket" : "New ticket",
+    analytics: "Analytics",
+    capture: editingId ? "Edit log" : "New log",
     logs: "Work logs",
     projects: "Projects",
     scratch: "Scratch paper",
   }[page];
 
   const pageSub = {
-    dashboard: "Open tickets and recent activity",
-    capture: "Submit a project ticket, then mark it done when shipped",
+    dashboard: "Open logs and recent activity",
+    analytics: "Charts for the logs in a date range",
+    capture:
+      "Paste a daily accomplishment and the logs are created on that date",
     logs: `Browsing ${activeDateLabel}`,
-    projects: "Group your tickets and notes by project / repo",
+    projects: "Group your logs and notes by project / repo",
     scratch: "Dump thoughts here — organized, no save",
   }[page];
 
@@ -287,9 +392,9 @@ export default function HomePage() {
         to: toValue,
       });
 
-      const doneRes = await fetch(`/api/entries?${doneParams}`);
+      const doneRes = await apiFetch(`/api/entries?${doneParams}`);
       if (!doneRes.ok) {
-        throw new Error("Failed to load tickets for export");
+        throw new Error("Failed to load logs for export");
       }
 
       const completedTickets = (await doneRes.json()) as Entry[];
@@ -310,6 +415,56 @@ export default function HomePage() {
     }
   }
 
+  async function exportConsolidated() {
+    setPreparingReport(true);
+    setError("");
+    try {
+      const doneParams = new URLSearchParams({
+        type: "TICKET",
+        status: "DONE",
+        dateField: "resolved_at",
+      });
+      const doneRes = await apiFetch(`/api/entries?${doneParams}`);
+      if (!doneRes.ok) {
+        throw new Error("Failed to load logs for the consolidated report");
+      }
+
+      const completedTickets = (await doneRes.json()) as Entry[];
+      const weeks = buildConsolidatedWeeks(
+        completedTickets.map((entry) => ({
+          projectName: entry.project?.name ?? null,
+          title: entry.title,
+          body: entry.body,
+          at: entry.resolvedAt || entry.createdAt,
+        }))
+      );
+
+      if (!weeks.length) {
+        setError("No accomplishments to consolidate.");
+        return;
+      }
+
+      setReportWeeks(weeks);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Consolidated export failed");
+    } finally {
+      setPreparingReport(false);
+    }
+  }
+
+  async function exportChosenFormat(format: ReportFormat) {
+    if (!reportWeeks?.length) return;
+    const name = exportName.trim() || session?.user?.name?.trim() || "";
+    const fromValue = toInputDate(reportWeeks[0].start);
+    const toValue = toInputDate(reportWeeks[reportWeeks.length - 1].end);
+    const filename =
+      fromValue === toValue
+        ? `consolidated-${fromValue}.docx`
+        : `consolidated-${fromValue}_to_${toValue}.docx`;
+    await downloadConsolidatedDocx(filename, name, reportWeeks, format);
+    setReportWeeks(null);
+  }
+
   function exportTodayAccomplishment() {
     const today = toInputDate();
     return exportNotepad({ from: today, to: today });
@@ -325,6 +480,7 @@ export default function HomePage() {
       status: entry.status ?? "OPEN",
       tags: entry.tags || "",
       projectId: entry.projectId || "",
+      loggedOn: entryLogDate(entry),
     });
     setPage("capture");
   }
@@ -339,7 +495,42 @@ export default function HomePage() {
 
   function cancelEdit() {
     setEditingId(null);
-    setForm(emptyForm);
+    setForm(freshForm());
+  }
+
+  async function onImportAccomplishment(e: FormEvent) {
+    e.preventDefault();
+    setImporting(true);
+    setError("");
+
+    try {
+      const res = await apiFetch("/api/entries/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: importText }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Could not create logs");
+      }
+
+      const keptName =
+        accomplishmentName(importText) || session?.user?.name?.trim() || "";
+      const fromLabel = formatDate(parseInputDate(data.from));
+      const toLabel = formatDate(parseInputDate(data.to));
+      const when = data.from === data.to ? fromLabel : `${fromLabel} – ${toLabel}`;
+      setImportNotice(
+        `Created ${data.created} log${data.created === 1 ? "" : "s"} for ${when}.`
+      );
+      setImportText(accomplishmentTemplate(keptName));
+      setDateFrom(data.from);
+      setDateTo(data.to);
+      await loadProjects();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create logs");
+    } finally {
+      setImporting(false);
+    }
   }
 
   async function onSaveEntry(e: FormEvent) {
@@ -348,7 +539,13 @@ export default function HomePage() {
     setError("");
 
     if (isTicketType(form.type) && !form.projectId) {
-      setError("Project is required for tickets");
+      setError("Project is required for logs");
+      setSaving(false);
+      return;
+    }
+
+    if (form.loggedOn && form.loggedOn > toInputDate()) {
+      setError("The accomplishment date cannot be in the future.");
       setSaving(false);
       return;
     }
@@ -358,6 +555,7 @@ export default function HomePage() {
       type: form.type,
       status: form.status,
       projectId: form.projectId,
+      loggedOn: form.loggedOn,
     };
 
     try {
@@ -367,10 +565,11 @@ export default function HomePage() {
         type: form.type,
         tags: form.tags,
         projectId: form.projectId || null,
+        loggedOn: form.loggedOn,
         ...(isTicketType(form.type) ? { status: form.status } : {}),
       };
 
-      const res = await fetch(
+      const res = await apiFetch(
         editingId ? `/api/entries/${editingId}` : "/api/entries",
         {
           method: editingId ? "PATCH" : "POST",
@@ -390,13 +589,14 @@ export default function HomePage() {
         type: kept.type,
         status: kept.status,
         projectId: kept.projectId,
+        loggedOn: kept.loggedOn || toInputDate(),
       });
       setEditingId(null);
       await loadEntries();
       await loadProjects();
       await loadAlerts();
       await loadDoneToday();
-      if (isTicketType(kept.type)) {
+      if (isTicketType(kept.type) && kept.loggedOn === toInputDate()) {
         goPage("dashboard");
       }
     } catch (err) {
@@ -411,7 +611,7 @@ export default function HomePage() {
     if (!projectName.trim()) return;
     setError("");
     try {
-      const res = await fetch("/api/projects", {
+      const res = await apiFetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: projectName.trim() }),
@@ -428,7 +628,7 @@ export default function HomePage() {
   }
 
   async function setTicketStatus(entry: Entry, status: TicketStatus) {
-    const res = await fetch(`/api/entries/${entry.id}`, {
+    const res = await apiFetch(`/api/entries/${entry.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
@@ -444,7 +644,7 @@ export default function HomePage() {
 
   async function removeEntry(id: string) {
     if (!confirm("Delete this entry?")) return;
-    const res = await fetch(`/api/entries/${id}`, { method: "DELETE" });
+    const res = await apiFetch(`/api/entries/${id}`, { method: "DELETE" });
     if (res.ok) {
       await loadEntries();
       await loadAlerts();
@@ -456,7 +656,7 @@ export default function HomePage() {
   async function removeProject(id: string) {
     if (!confirm("Delete this project? Entries stay, but become unassigned."))
       return;
-    const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+    const res = await apiFetch(`/api/projects/${id}`, { method: "DELETE" });
     if (res.ok) {
       await loadProjects();
       await loadEntries();
@@ -611,9 +811,66 @@ export default function HomePage() {
         }}
       >
         <p className="muted">
-          Tip: Enter saves · Shift+Enter new line · Type/Title/Project stay after
-          save
+          Tip: Enter saves · Shift+Enter new line · Type, title, project, and
+          date stay after save so you can add the rest of that day.
         </p>
+        <div className={ticket ? "row" : ""}>
+          <div className="field">
+            <label htmlFor="loggedOn">Accomplishment date</label>
+            <input
+              id="loggedOn"
+              type="date"
+              max={toInputDate()}
+              value={form.loggedOn}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, loggedOn: e.target.value }))
+              }
+              required
+            />
+            <p className="muted" style={{ margin: "4px 0 0" }}>
+              Pick the day this work belongs to. A past date, such as 10 Aug
+              2026, files the log on that day. Set status to Done and it is
+              included when you export that daily accomplishment.
+            </p>
+          </div>
+          {ticket ? (
+            <div className="field">
+              <label htmlFor="status">Status</label>
+              <select
+                id="status"
+                value={form.status}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    status: e.target.value as TicketStatus,
+                  }))
+                }
+              >
+                {TICKET_STATUSES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <p className="muted" style={{ margin: "4px 0 0" }}>
+                Done on the accomplishment date is what the export lists under
+                Tasks Completed.
+              </p>
+              {form.status !== "DONE" ? (
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  style={{ marginTop: 8, alignSelf: "flex-start" }}
+                  onClick={() => setForm((f) => ({ ...f, status: "DONE" }))}
+                >
+                  {form.loggedOn === toInputDate()
+                    ? "Mark as done today"
+                    : "Mark as done on this date"}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         <div className="row">
           <div className="field">
             <label htmlFor="type">Type</label>
@@ -657,42 +914,6 @@ export default function HomePage() {
             </select>
           </div>
         </div>
-
-        {ticket ? (
-          <div className="field">
-            <label htmlFor="status">Status</label>
-            <select
-              id="status"
-              value={form.status}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  status: e.target.value as TicketStatus,
-                }))
-              }
-            >
-              {TICKET_STATUSES.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-            <p className="muted" style={{ margin: "4px 0 0" }}>
-              Choose <strong>Done</strong> for work already finished today — it
-              goes into daily accomplishment.
-            </p>
-            {form.status !== "DONE" ? (
-              <button
-                className="btn btn--ghost"
-                type="button"
-                style={{ marginTop: 8, alignSelf: "flex-start" }}
-                onClick={() => setForm((f) => ({ ...f, status: "DONE" }))}
-              >
-                Mark as done today
-              </button>
-            ) : null}
-          </div>
-        ) : null}
 
         <div className="field">
           <label htmlFor="title">Title</label>
@@ -747,10 +968,10 @@ export default function HomePage() {
               ? "Saving..."
               : editingId
                 ? ticket
-                  ? "Update ticket"
+                  ? "Update log"
                   : "Update entry"
                 : ticket
-                  ? "Submit ticket"
+                  ? "Save log"
                   : "Save entry"}
           </button>
           {editingId ? (
@@ -768,178 +989,179 @@ export default function HomePage() {
     );
   }
 
-  function mastLink(target: Page, label: string) {
-    const active = page === target;
-    return (
-      <button
-        type="button"
-        className={`mast-link${active ? " mast-link--active" : ""}`}
-        onClick={() => {
-          if (target === "logs") goLogsToday();
-          else goPage(target);
-        }}
-      >
-        {label}
-      </button>
-    );
-  }
-
-  function dockItem(
-    target: Page,
-    label: string,
-    opts?: { raised?: boolean; onClick?: () => void }
-  ) {
-    const active = page === target;
-    return (
-      <button
-        type="button"
-        className={`dock-item${active ? " dock-item--active" : ""}${
-          opts?.raised ? " dock-item--new" : ""
-        }`}
-        onClick={opts?.onClick ?? (() => goPage(target))}
-      >
-        {label}
-      </button>
-    );
-  }
-
   return (
-    <div className={`shell${widgetMode ? " shell--widget" : ""}`}>
-      {!widgetMode ? (
-        <header className="masthead">
-          <button
-            type="button"
-            className="masthead-brand"
-            onClick={() => goPage("dashboard")}
-          >
-            <span className="masthead-mark" aria-hidden>
-              &lt;/&gt;
-            </span>
-            <span>
-              <strong>DevLog</strong>
-              <span>Ticket board</span>
-            </span>
-          </button>
-
-          <nav className="masthead-nav" aria-label="Primary">
-            {mastLink("dashboard", "Board")}
-            {mastLink("capture", "New")}
-            {mastLink("logs", "Logs")}
-            {mastLink("scratch", "Scratch")}
-            {mastLink("projects", "Projects")}
-          </nav>
-
-          <div className="mast-meta">
-            <em>{openTickets.length}</em> open
-          </div>
-        </header>
-      ) : null}
-
-      {widgetMode ? (
-        <nav className="widget-nav">
-          {(
-            ["capture", "logs", "scratch", "dashboard", "projects"] as Page[]
-          ).map((p) => (
-            <button
-              key={p}
-              type="button"
-              className={`widget-nav-btn${page === p ? " active" : ""}`}
-              onClick={() => setPage(p)}
-            >
-              {p === "capture"
-                ? "＋"
-                : p === "logs"
-                  ? "☰"
-                  : p === "scratch"
-                    ? "✎"
-                    : p === "dashboard"
-                      ? "◈"
-                      : "▣"}
-            </button>
-          ))}
-        </nav>
-      ) : null}
-
-      <main className="stage">
+    <AdminFrame
+      widgetMode={widgetMode}
+      page={page}
+      title={pageTitle}
+      email={session?.user?.email}
+      openCount={openTickets.length}
+      onNavigate={(next) => {
+        if (next === "logs") goLogsToday();
+        else goPage(next);
+      }}
+      onSearch={(value) => {
+        setQuery(value);
+        setDateFrom("");
+        setDateTo("");
+        setTypeFilter("");
+        setProjectFilter("");
+        goPage("logs");
+      }}
+      onSignOut={() => signOut({ callbackUrl: "/login" })}
+    >
         {error ? <div className="error">{error}</div> : null}
+        {unassigned.projects + unassigned.entries > 0 ? (
+          <div className="claim-banner">
+            <p>
+              {unassigned.entries} logs and {unassigned.projects} projects were
+              saved before accounts existed. They are hidden until you attach
+              them to this account.
+            </p>
+            <button
+              type="button"
+              className="btn btn--tiny"
+              disabled={claiming}
+              onClick={async () => {
+                setClaiming(true);
+                setError("");
+                try {
+                  const res = await apiFetch("/api/account/unassigned", {
+                    method: "POST",
+                  });
+                  const data = await res.json();
+                  if (!res.ok) {
+                    setError(data.error || "Could not attach the old logs");
+                    return;
+                  }
+                  await refresh();
+                } catch (e) {
+                  setError(
+                    e instanceof Error ? e.message : "Could not attach the old logs"
+                  );
+                } finally {
+                  setClaiming(false);
+                }
+              }}
+            >
+              {claiming ? "Attaching…" : "Add them to my account"}
+            </button>
+          </div>
+        ) : null}
 
         {page === "dashboard" ? (
-          <>
-            <header className="page-hero">
-              <div className="page-hero-text">
-                <h1>Board</h1>
-                <p>
-                  Mark tickets Done when you finish — those feed today&apos;s
-                  daily accomplishment.
-                </p>
-              </div>
-              <div className="page-hero-actions">
+          <div className="workly">
+            <section className="workly-card workly-new">
+              <div className="workly-art">
                 <button
-                  className="btn btn--ghost"
                   type="button"
-                  onClick={exportTodayAccomplishment}
-                  disabled={loading || doneToday.length === 0}
+                  className="workly-tile"
+                  onClick={goLogsToday}
                 >
-                  Export today
+                  <span>Today</span>
+                  <strong>
+                    {new Date().toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </strong>
+                  <em>
+                    {doneToday.length} finished
+                  </em>
                 </button>
+                <button
+                  type="button"
+                  className="workly-tile"
+                  onClick={() =>
+                    nextOpen ? openView(nextOpen) : goPage("capture")
+                  }
+                >
+                  <span>Open</span>
+                  <strong>{nextOpen?.title || "No open log"}</strong>
+                </button>
+                <button
+                  type="button"
+                  className="workly-tile"
+                  onClick={() =>
+                    latestDone ? openView(latestDone) : goLogsToday()
+                  }
+                >
+                  <span>Done</span>
+                  <strong>{latestDone?.title || "Nothing yet"}</strong>
+                </button>
+              </div>
+              <h2>New log</h2>
+              <p>
+                File the work for a project. Done logs land in today&apos;s
+                accomplishment.
+              </p>
+              <div className="workly-stats">
+                <div>
+                  <b>{openTickets.length}</b>
+                  <span>Open</span>
+                </div>
+                <div>
+                  <b>{inProgressCount}</b>
+                  <span>Active</span>
+                </div>
+                <div>
+                  <b>{doneToday.length}</b>
+                  <span>Done</span>
+                </div>
+                <div>
+                  <b>{projects.length}</b>
+                  <span>Projects</span>
+                </div>
+              </div>
+              <div className="workly-actions">
                 <button
                   className="btn"
                   type="button"
                   onClick={() => goPage("capture")}
                 >
-                  New ticket
+                  + New log
+                </button>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={goLogsToday}
+                >
+                  Logs
                 </button>
               </div>
-            </header>
-
-            <div className="metric-row">
-              <div className="metric">
-                <b>{doneToday.length}</b>
-                <span>Done today</span>
-              </div>
-              <div className="metric">
-                <b>{openTickets.length}</b>
-                <span>Open · {inProgressCount} active</span>
-              </div>
-              <div className="metric">
-                <b>{entries.length}</b>
-                <span>7 days</span>
-              </div>
-              <div className="metric">
-                <b>{projects.length}</b>
-                <span>Projects</span>
-              </div>
+            </section>
+            <div className="workly-stack">
+              <section className="workly-card workly-mini">
+                <p className="muted">Last 7 days</p>
+                <h3>{entries.length} logs</h3>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => goPage("analytics")}
+                >
+                  Analytics
+                </button>
+              </section>
+              <section className="workly-card workly-mini">
+                <p className="muted">Scratch paper</p>
+                <h3>Quick notes</h3>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => goPage("scratch")}
+                >
+                  Open
+                </button>
+              </section>
             </div>
 
-            <section className="section">
+            <section className="workly-card workly-tasks">
               <div className="section-head">
-                <h2>Done today</h2>
-                <span className="muted">
-                  {doneToday.length} ticket
-                  {doneToday.length === 1 ? "" : "s"} → daily accomplishment
-                </span>
-              </div>
-              {loading ? (
-                <p className="empty">Loading...</p>
-              ) : doneToday.length === 0 ? (
-                <p className="empty">
-                  No done tickets today yet. Finish an open ticket or submit one
-                  with status Done.
-                </p>
-              ) : (
-                <div className="entry-list">
-                  {doneToday.map(renderEntryCard)}
-                </div>
-              )}
-            </section>
-
-            <section className="section">
-              <div className="section-head">
-                <h2>Open tickets</h2>
+                <h2>Open logs</h2>
                 <span className="muted">{openTickets.length} total</span>
               </div>
               {openTickets.length === 0 ? (
-                <p className="empty">No open tickets. Tap New to submit one.</p>
+                <p className="empty">No open logs. Add one to start the board.</p>
               ) : (
                 <div className="ticket-list">
                   {openTickets.map((entry) => (
@@ -958,9 +1180,7 @@ export default function HomePage() {
                         <div className="meta">
                           {entry.project ? (
                             <span className="chip">{entry.project.name}</span>
-                          ) : (
-                            <span className="chip">No project</span>
-                          )}
+                          ) : null}
                           <span className={statusChipClass(entry.status)}>
                             {statusMeta(entry.status)?.label || "Open"}
                           </span>
@@ -968,20 +1188,156 @@ export default function HomePage() {
                       </button>
                       <div className="ticket-row__actions">
                         {ticketStatusActions(entry)}
-                        <button
-                          className="btn btn--ghost"
-                          type="button"
-                          onClick={() => openView(entry)}
-                        >
-                          View
-                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
             </section>
-          </>
+
+            <section className="workly-card workly-done">
+              <div className="section-head">
+                <h2>Done today</h2>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={exportTodayAccomplishment}
+                  disabled={loading || doneToday.length === 0}
+                >
+                  Export
+                </button>
+              </div>
+              {loading ? (
+                <p className="empty">Loading...</p>
+              ) : doneToday.length === 0 ? (
+                <p className="empty">Nothing finished today yet.</p>
+              ) : (
+                <div className="entry-list">
+                  {doneToday.map(renderEntryCard)}
+                </div>
+              )}
+            </section>
+
+            <section className="workly-card workly-side">
+              <div className="section-head">
+                <h2>Projects</h2>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => goPage("projects")}
+                >
+                  All
+                </button>
+              </div>
+              {projects.length === 0 ? (
+                <p className="empty">No projects yet.</p>
+              ) : (
+                <ul className="workly-people">
+                  {projects.slice(0, 6).map((project) => (
+                    <li key={project.id}>
+                      <span className="desk-avatar">
+                        {project.name.slice(0, 2).toUpperCase()}
+                      </span>
+                      <span>{project.name}</span>
+                      <span className="muted">
+                        {project._count?.entries ?? 0}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                className="btn"
+                type="button"
+                onClick={() => goPage("projects")}
+              >
+                + Project
+              </button>
+            </section>
+
+            <section className="workly-card workly-recent">
+              <div className="section-head">
+                <h2>Recent logs</h2>
+                <span className="muted">{entries.length} in 7 days</span>
+              </div>
+              {entries.length === 0 ? (
+                <p className="empty">No logs in the last 7 days.</p>
+              ) : (
+                <div className="workly-table-wrap">
+                  <table className="workly-table">
+                    <thead>
+                      <tr>
+                        <th>Project</th>
+                        <th>Title</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {entries.slice(0, 8).map((entry) => (
+                        <tr key={entry.id} onClick={() => openView(entry)}>
+                          <td>{entry.project?.name || "No project"}</td>
+                          <td>{entry.title}</td>
+                          <td>{formatDate(entry.createdAt)}</td>
+                          <td>
+                            {entry.status ? (
+                              <span className={statusChipClass(entry.status)}>
+                                {statusMeta(entry.status)?.label || "Open"}
+                              </span>
+                            ) : (
+                              <span className="chip">
+                                {typeMeta(entry.type).label}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <section className="workly-card workly-perf">
+              <div className="section-head">
+                <h2>This week</h2>
+                <button
+                  className="btn btn--ghost"
+                  type="button"
+                  onClick={() => goPage("analytics")}
+                >
+                  Charts
+                </button>
+              </div>
+              <svg
+                className="workly-chart"
+                viewBox="0 0 260 120"
+                role="img"
+                aria-label="Logs over the last 7 days"
+              >
+                <polyline
+                  points={weekPoints
+                    .map((point, index) => {
+                      const max = Math.max(
+                        1,
+                        ...weekPoints.map((item) => item.count)
+                      );
+                      const x = (index / 6) * 250 + 5;
+                      const y = 108 - (point.count / max) * 90;
+                      return `${x},${y}`;
+                    })
+                    .join(" ")}
+                />
+              </svg>
+              <div className="workly-legend">
+                {weekPoints.map((point) => (
+                  <span key={point.key}>
+                    {point.label} {point.count}
+                  </span>
+                ))}
+              </div>
+            </section>
+          </div>
         ) : null}
 
         {page === "capture" ? (
@@ -995,9 +1351,44 @@ export default function HomePage() {
               </header>
             ) : null}
 
+            {!editingId ? (
+              <section className="compose panel">
+                <div className="section-head">
+                  <h3>Paste accomplishment</h3>
+                </div>
+                <form onSubmit={onImportAccomplishment}>
+                  <p className="muted">
+                    The header is already filled in. Add the date, then paste
+                    the tasks under Tasks Completed. Each task is created as
+                    Done. A range such as Aug 10–15, 2026 files those tasks on
+                    the first day, so opening that range brings the
+                    accomplishment back.
+                  </p>
+                  {importNotice ? <p className="import-notice">{importNotice}</p> : null}
+                  <div className="field">
+                    <label htmlFor="accomplishment">Daily accomplishment</label>
+                    <textarea
+                      id="accomplishment"
+                      className="import-input"
+                      value={importText}
+                      onChange={(e) => {
+                        setImportNotice("");
+                        setImportText(e.target.value);
+                      }}
+                    />
+                  </div>
+                  <div className="btn-row">
+                    <button className="btn" type="submit" disabled={importing}>
+                      {importing ? "Creating logs..." : "Create logs"}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            ) : null}
+
             <section className="compose panel">
               <div className="section-head">
-                <h3>{editingId ? "Edit" : "Submit ticket"}</h3>
+                <h3>{editingId ? "Edit" : "New log"}</h3>
               </div>
               {captureForm()}
             </section>
@@ -1060,9 +1451,17 @@ export default function HomePage() {
                   <button
                     className="btn"
                     type="button"
+                    onClick={exportConsolidated}
+                    disabled={loading || preparingReport}
+                  >
+                    {preparingReport ? "Opening..." : "Consolidated"}
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
                     onClick={() => goPage("capture")}
                   >
-                    New ticket
+                    New log
                   </button>
                 </div>
               </header>
@@ -1073,67 +1472,96 @@ export default function HomePage() {
                 <h3>Filter & export</h3>
                 <span className="muted">{entries.length} entries</span>
               </div>
+              <p className="muted">
+                Consolidated opens a preview of all your done logs. Pick a
+                format, then export the Word file. A week with no work is
+                included in a neighboring week that has work.
+              </p>
+              {widgetMode ? (
+                <div className="btn-row">
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={exportConsolidated}
+                    disabled={loading || preparingReport}
+                  >
+                    {preparingReport ? "Opening..." : "Consolidated"}
+                  </button>
+                </div>
+              ) : null}
 
               <div className="filters">
                 <label className="field">
-                  <span className="muted">From</span>
+                  <span>From</span>
                   <input
                     type="date"
                     value={dateFrom}
                     onChange={(e) => onDateFromChange(e.target.value)}
-                    aria-label="From date"
                   />
                 </label>
                 <label className="field">
-                  <span className="muted">To</span>
+                  <span>To</span>
                   <input
                     type="date"
                     value={dateTo}
                     onChange={(e) => onDateToChange(e.target.value)}
-                    aria-label="To date"
                   />
                 </label>
-                <input
-                  value={exportName}
-                  onChange={(e) => setExportName(e.target.value)}
-                  placeholder="Name for export"
-                  aria-label="Name for export"
-                />
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search title, body, tags..."
-                />
-                <select
-                  value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value)}
-                >
-                  <option value="">All types</option>
-                  {ENTRY_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={projectFilter}
-                  onChange={(e) => setProjectFilter(e.target.value)}
-                >
-                  <option value="">All projects</option>
-                  {projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                {dateFrom || dateTo ? (
-                  <button
-                    className="btn btn--ghost"
-                    type="button"
-                    onClick={goAllLogs}
+                <label className="field">
+                  <span>Export name</span>
+                  <input
+                    value={exportName}
+                    onChange={(e) => setExportName(e.target.value)}
+                    placeholder="Your name"
+                  />
+                </label>
+                <label className="field">
+                  <span>Search</span>
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Title, body, tags"
+                  />
+                </label>
+                <label className="field">
+                  <span>Type</span>
+                  <select
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
                   >
-                    Clear dates
-                  </button>
+                    <option value="">All types</option>
+                    {ENTRY_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Project</span>
+                  <select
+                    value={projectFilter}
+                    onChange={(e) => setProjectFilter(e.target.value)}
+                  >
+                    <option value="">All projects</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {dateFrom || dateTo ? (
+                  <div className="field">
+                    <span aria-hidden="true">&nbsp;</span>
+                    <button
+                      className="btn btn--ghost"
+                      type="button"
+                      onClick={goAllLogs}
+                    >
+                      Clear dates
+                    </button>
+                  </div>
                 ) : null}
               </div>
 
@@ -1150,6 +1578,8 @@ export default function HomePage() {
           </>
         ) : null}
 
+        {page === "analytics" ? <AnalyticsView projects={projects} /> : null}
+
         {page === "projects" ? (
           <>
             {!widgetMode ? (
@@ -1164,7 +1594,7 @@ export default function HomePage() {
                     type="button"
                     onClick={() => goPage("capture")}
                   >
-                    New ticket
+                    New log
                   </button>
                 </div>
               </header>
@@ -1233,19 +1663,17 @@ export default function HomePage() {
                 </div>
               </header>
             ) : null}
-            <ScratchPad />
+            <ScratchPad key={session?.user?.id || "scratch"} />
           </>
         ) : null}
-      </main>
 
-      {!widgetMode ? (
-        <nav className="dock" aria-label="Primary">
-          {dockItem("dashboard", "Board")}
-          {dockItem("logs", "Logs", { onClick: goLogsToday })}
-          {dockItem("capture", "New", { raised: true })}
-          {dockItem("scratch", "Scratch")}
-          {dockItem("projects", "More")}
-        </nav>
+      {reportWeeks ? (
+        <ConsolidatedFormatModal
+          weeks={reportWeeks}
+          personName={exportName.trim() || session?.user?.name?.trim() || ""}
+          onClose={() => setReportWeeks(null)}
+          onExport={exportChosenFormat}
+        />
       ) : null}
 
       {viewingEntry ? (
@@ -1341,6 +1769,6 @@ export default function HomePage() {
           </div>
         </div>
       ) : null}
-    </div>
+    </AdminFrame>
   );
 }

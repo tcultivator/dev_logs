@@ -8,12 +8,19 @@ import {
   endOfDay,
   isTicketType,
   parseLocalDate,
+  parseLoggedOn,
   startOfDay,
 } from "@/lib/entries";
 import { createEntry, listEntries } from "@/lib/models";
+import { requireUser } from "@/lib/session";
 
 export async function GET(request: Request) {
   try {
+    const user = await requireUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const q = searchParams.get("q")?.trim() || undefined;
     const typeParam = searchParams.get("type");
@@ -65,6 +72,7 @@ export async function GET(request: Request) {
     }
 
     const entries = await listEntries({
+      userId: user.id,
       q,
       type,
       status,
@@ -93,6 +101,11 @@ function toInputFallback() {
 
 export async function POST(request: Request) {
   try {
+    const user = await requireUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await request.json();
     const title = String(body.title || "").trim();
     const content = String(body.body || "").trim();
@@ -103,6 +116,12 @@ export async function POST(request: Request) {
       body.status && TICKET_STATUS_VALUES.includes(body.status)
         ? (body.status as TicketStatus)
         : undefined;
+    const loggedOnResult = body.loggedOn
+      ? parseLoggedOn(String(body.loggedOn))
+      : null;
+    if (loggedOnResult && !loggedOnResult.ok) {
+      return NextResponse.json({ error: loggedOnResult.error }, { status: 400 });
+    }
 
     if (!title || !content || !type) {
       return NextResponse.json(
@@ -117,23 +136,28 @@ export async function POST(request: Request) {
 
     if (isTicketType(type) && !projectId) {
       return NextResponse.json(
-        { error: "project is required for tickets" },
+        { error: "project is required for logs" },
         { status: 400 }
       );
     }
 
     const entry = await createEntry({
+      userId: user.id,
       title,
       body: content,
       type,
       tags,
       projectId,
       status,
+      loggedOn: loggedOnResult?.ok ? loggedOnResult.date : null,
     });
 
     return NextResponse.json(entry, { status: 201 });
   } catch (error) {
     console.error(error);
+    if (error instanceof Error && error.message === "PROJECT_NOT_FOUND") {
+      return NextResponse.json({ error: "Project not found" }, { status: 400 });
+    }
     return NextResponse.json(
       { error: "Database error while creating entry" },
       { status: 500 }
