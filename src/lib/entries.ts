@@ -15,7 +15,7 @@ export const ENTRY_TYPES: {
   label: string;
   color: string;
 }[] = [
-  { value: "TICKET", label: "Ticket", color: "#0f766e" },
+  { value: "TICKET", label: "Log", color: "#0f766e" },
   { value: "LEARNING", label: "Learning", color: "#7c3aed" },
   { value: "DB_CHANGE", label: "DB Change", color: "#15803d" },
   { value: "SQL", label: "SQL", color: "#a16207" },
@@ -82,6 +82,31 @@ export function endOfDay(date = new Date()) {
 export function parseLocalDate(value: string) {
   const [y, m, d] = value.split("-").map(Number);
   return new Date(y, (m || 1) - 1, d || 1);
+}
+
+/** Noon on a past or current day, so the log lands in that day's accomplishment. */
+export function parseLoggedOn(
+  value: string
+): { ok: true; date: Date } | { ok: false; error: string } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return { ok: false, error: "Enter a valid accomplishment date." };
+  }
+  const [y, m, d] = value.split("-").map(Number);
+  const date = new Date(y, m - 1, d, 12, 0, 0, 0);
+  if (
+    date.getFullYear() !== y ||
+    date.getMonth() !== m - 1 ||
+    date.getDate() !== d
+  ) {
+    return { ok: false, error: "Enter a valid accomplishment date." };
+  }
+  if (date > endOfDay(new Date())) {
+    return {
+      ok: false,
+      error: "The accomplishment date cannot be in the future.",
+    };
+  }
+  return { ok: true, date };
 }
 
 export function formatDate(date: Date | string) {

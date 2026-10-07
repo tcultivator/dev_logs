@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { createProject, listProjects } from "@/lib/models";
+import { claimUnassigned, countUnassigned } from "@/lib/models";
 import { requireUser } from "@/lib/session";
+
+export const runtime = "nodejs";
 
 export async function GET() {
   try {
@@ -8,47 +10,38 @@ export async function GET() {
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const projects = await listProjects(user.id);
-    return NextResponse.json(projects);
+    return NextResponse.json(await countUnassigned());
   } catch (error) {
     console.error(error);
     return NextResponse.json(
-      { error: "Database error. Is MySQL running and .env correct?" },
+      { error: "Could not check unassigned logs" },
       { status: 500 }
     );
   }
 }
 
-export async function POST(request: Request) {
+export async function POST() {
   try {
     const user = await requireUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    const body = await request.json();
-    const name = String(body.name || "").trim();
-    const description = body.description
-      ? String(body.description).trim()
-      : null;
-
-    if (!name) {
-      return NextResponse.json({ error: "name is required" }, { status: 400 });
-    }
-
-    const project = await createProject(user.id, name, description);
-    return NextResponse.json(project, { status: 201 });
+    await claimUnassigned(user.id);
+    return NextResponse.json({ ok: true });
   } catch (error) {
     console.error(error);
     const message = String(error);
     if (message.includes("Duplicate") || message.includes("ER_DUP_ENTRY")) {
       return NextResponse.json(
-        { error: "Project name already exists" },
+        {
+          error:
+            "An unassigned project uses a name you already have. Rename yours, then try again.",
+        },
         { status: 409 }
       );
     }
     return NextResponse.json(
-      { error: "Database error while creating project" },
+      { error: "Could not attach the old logs" },
       { status: 500 }
     );
   }

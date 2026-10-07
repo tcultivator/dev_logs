@@ -1,6 +1,7 @@
 "use client";
 
 import { KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useSession } from "next-auth/react";
 import {
   ListLine,
   ScratchBlock,
@@ -20,20 +21,23 @@ const KIND_LABEL: Record<ScratchKind, string> = {
 };
 
 export default function ScratchPad() {
+  const { data: session, status } = useSession();
+  const userId = session?.user?.id;
   const [blocks, setBlocks] = useState<ScratchBlock[]>(() =>
     defaultScratchBlocks()
   );
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    setBlocks(loadScratchBlocks());
+    if (status !== "authenticated" || !userId) return;
+    setBlocks(loadScratchBlocks(userId));
     setReady(true);
-  }, []);
+  }, [status, userId]);
 
   useEffect(() => {
-    if (!ready) return;
-    saveScratchBlocks(blocks);
-  }, [blocks, ready]);
+    if (!ready || !userId) return;
+    saveScratchBlocks(userId, blocks);
+  }, [blocks, ready, userId]);
 
   function updateBlock(id: string, patch: Partial<ScratchBlock>) {
     setBlocks((prev) =>

@@ -51,10 +51,14 @@ export function serializeListLines(lines: ListLine[]): string {
   return lines.map((line) => `${line.done ? "[x]" : "[ ]"} ${line.text}`).join("\n");
 }
 
-export function loadScratchBlocks(): ScratchBlock[] {
+export function scratchStorageKey(userId: string) {
+  return `${SCRATCH_STORAGE_KEY}:${userId}`;
+}
+
+export function loadScratchBlocks(userId: string): ScratchBlock[] {
   if (typeof window === "undefined") return defaultScratchBlocks();
   try {
-    const raw = localStorage.getItem(SCRATCH_STORAGE_KEY);
+    const raw = localStorage.getItem(scratchStorageKey(userId));
     if (!raw) return defaultScratchBlocks();
     const parsed = JSON.parse(raw) as ScratchBlock[];
     if (!Array.isArray(parsed) || parsed.length === 0) return defaultScratchBlocks();
@@ -69,7 +73,7 @@ export function loadScratchBlocks(): ScratchBlock[] {
   }
 }
 
-export function saveScratchBlocks(blocks: ScratchBlock[]) {
+export function saveScratchBlocks(userId: string, blocks: ScratchBlock[]) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(SCRATCH_STORAGE_KEY, JSON.stringify(blocks));
+  localStorage.setItem(scratchStorageKey(userId), JSON.stringify(blocks));
 }
